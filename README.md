@@ -14,18 +14,7 @@ Add it to `lgx.edn` under `:deps`:
 
 ```clojure
 {:deps {nrepl-client {:git/url "https://github.com/abogoyavlensky/nrepl-client"
-                      :git/tag "v0.1.0"}}}
-```
-
-> The tagged release is published at the **first release**, which is pending an
-> upstream `let-go` release that ships the `net`/`bencode` namespaces. Until
-> then, depend on it by `:local/root` (below) or a specific `:git/sha`.
-
-For local development against a checkout, use a path instead (lgx forbids mixing
-`:local/root` with `:git/*`):
-
-```clojure
-{:deps {nrepl-client {:local/root "../nrepl-client"}}}
+                      :git/tag "<TAG>"}}}
 ```
 
 ## Usage
@@ -83,3 +72,7 @@ lgx fmt     # format
 lgx lint    # lint (clj-kondo)
 lgx check   # fmt check + lint + test
 ```
+
+## License
+MIT License
+Copyright (c) 2026 Andrey Bogoyavlenskiy
