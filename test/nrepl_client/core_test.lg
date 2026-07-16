@@ -1,0 +1,6 @@
+(ns nrepl-client.core-test
+  (:require [clojure.test :refer [deftest is]]
+            [nrepl-client.core :as c]))
+
+(deftest test-greet-ok
+  (is (= "Welcome to let-go!" (c/greet "let-go"))))
