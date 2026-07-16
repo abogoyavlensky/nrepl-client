@@ -17,6 +17,10 @@ Add it to `lgx.edn` under `:deps`:
                       :git/tag "v0.1.0"}}}
 ```
 
+> The tagged release is published at the **first release**, which is pending an
+> upstream `let-go` release that ships the `net`/`bencode` namespaces. Until
+> then, depend on it by `:local/root` (below) or a specific `:git/sha`.
+
 For local development against a checkout, use a path instead (lgx forbids mixing
 `:local/root` with `:git/*`):
 
