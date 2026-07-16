@@ -91,3 +91,29 @@
             (nrepl/close! conn session))))
       (finally
         (stop-server! server)))))
+
+(deftest timeout-then-reuse
+  ;; regression: after an eval times out, the same session must stay usable.
+  ;; The timed-out request keeps running server-side, so its late value/done
+  ;; land on the socket; the next eval must read *its own* response (id
+  ;; correlation), not the stale one. Pre-fix, `(+ 2 3)` reported 42.
+  (let [host "127.0.0.1"
+        port (os/free-port)
+        server (start-server! port)]
+    (try
+      (let [conn (wait-connect! host port)]
+        (is (some? conn) "server should accept a connection")
+        (when conn
+          (let [session (nrepl/clone! conn host port)]
+            ;; time out a slow eval (the server keeps computing it for ~1s)
+            (let [{:keys [result]} (collect-eval conn session "(do (sleep 1000) 42)"
+                                                 {:timeout-ms 100})]
+              (is (:timeout? result) "the slow eval times out"))
+            ;; reuse the same session: it must report 5, never the stale 42
+            (let [{:keys [events result]} (collect-eval conn session "(+ 2 3)" {})]
+              (is (contains? (set events) [:value "5"]) "reuse reads its own response")
+              (is (not (contains? (set events) [:value "42"])) "the timed-out value must not leak")
+              (is (not (:error? result))))
+            (nrepl/close! conn session))))
+      (finally
+        (stop-server! server)))))

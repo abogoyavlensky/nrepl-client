@@ -52,8 +52,19 @@
 
 ;; ---- nREPL client IO ---------------------------------------------------
 ;;
-;; Thin IO over the let-go net/bencode primitives. Message ids are fixed
-;; ("1" clone, "2" eval, "3" close) — fine for a one-shot client.
+;; Thin IO over the let-go net/bencode primitives. Each request gets a unique
+;; message id from `gen-id`, and the read loops process only messages echoing
+;; that id, ignoring the rest. So a stale response — e.g. from a timed-out
+;; eval still running server-side — never contaminates a later request on a
+;; reused session.
+
+(def ^:private next-id
+  "Monotonic source of unique nREPL message ids for this process."
+  (atom 0))
+
+(defn- gen-id
+  []
+  (str (swap! next-id inc)))
 
 (def ^:private clone-timeout-ms
   "Fixed read timeout for the clone handshake, so a non-nREPL listener can't
@@ -80,57 +91,76 @@
    new-session id string. A timeout, EOF, or a done response without a
    new-session means the peer isn't a real nREPL server -> ex-info."
   [conn host port]
-  (bencode/write! conn {"op" "clone"
-                        "id" "1"})
-  (loop [session nil]
-    ;; timeout throws (message contains "timeout"); clean EOF returns nil.
-    (let [msg (try (bencode/read! conn clone-timeout-ms) (catch e :timeout))]
-      (if (or (= msg :timeout) (nil? msg))
-        (no-nrepl! host port)
-        (let [session (or session (get msg "new-session"))]
-          (if (:done? (msg-effects msg))
-            (or session (no-nrepl! host port))
-            (recur session)))))))
+  (let [id (gen-id)]
+    (bencode/write! conn {"op" "clone"
+                          "id" id})
+    (loop [session nil]
+      ;; timeout throws (message contains "timeout"); clean EOF returns nil.
+      (let [msg (try (bencode/read! conn clone-timeout-ms) (catch e :timeout))]
+        (cond
+          (or (= msg :timeout) (nil? msg))
+          (no-nrepl! host port)
+
+          ;; a message for some other request — ignore it, keep reading
+          (not= (get msg "id") id)
+          (recur session)
+
+          :else
+          (let [session (or session (get msg "new-session"))]
+            (if (:done? (msg-effects msg))
+              (or session (no-nrepl! host port))
+              (recur session))))))))
 
 (defn eval!
   "Evaluate code in session; stream events to :emit as they arrive (never
    batched), stopping on done. Returns {:error? bool :timeout? bool}. Does NOT
    send close — one session may serve several evals, so leaving the stream
    clean matters. A read timeout -> {:timeout? true}; any other abnormal read
-   (EOF or IO error) before done -> ex-info (connection closed)."
+   (EOF or IO error) before done -> ex-info (connection closed).
+
+   Safe to call again on the same session after a timeout: each eval uses a
+   unique message id and ignores responses carrying any other id, so the
+   still-running timed-out request's late reply is skipped rather than misread
+   as this eval's result."
   [conn session code {:keys [timeout-ms emit]}]
-  (bencode/write! conn {"op" "eval"
-                        "code" code
-                        "session" session
-                        "id" "2"})
-  (loop [errored? false]
-    (let [outcome (try
-                    {:msg (if timeout-ms
-                            (bencode/read! conn timeout-ms)
-                            (bencode/read! conn))}
-                    (catch e
-                           (if (str/includes? (str (ex-message e)) "timeout")
-                             {:timeout? true}
-                             (throw (ex-info "Connection closed by nREPL server before eval completed"
-                                             {:kind :eof})))))]
-      (cond
-        (:timeout? outcome)
-        {:error? errored?
-         :timeout? true}
+  (let [id (gen-id)]
+    (bencode/write! conn {"op" "eval"
+                          "code" code
+                          "session" session
+                          "id" id})
+    (loop [errored? false]
+      (let [outcome (try
+                      {:msg (if timeout-ms
+                              (bencode/read! conn timeout-ms)
+                              (bencode/read! conn))}
+                      (catch e
+                             (if (str/includes? (str (ex-message e)) "timeout")
+                               {:timeout? true}
+                               (throw (ex-info "Connection closed by nREPL server before eval completed"
+                                               {:kind :eof})))))]
+        (cond
+          (:timeout? outcome)
+          {:error? errored?
+           :timeout? true}
 
-        (nil? (:msg outcome))
-        (throw (ex-info "Connection closed by nREPL server before eval completed"
-                        {:kind :eof}))
+          (nil? (:msg outcome))
+          (throw (ex-info "Connection closed by nREPL server before eval completed"
+                          {:kind :eof}))
 
-        :else
-        (let [eff (msg-effects (:msg outcome))]
-          (doseq [ev (:events eff)]
-            (emit ev))
-          (let [errored? (or errored? (:error? eff))]
-            (if (:done? eff)
-              {:error? errored?
-               :timeout? false}
-              (recur errored?))))))))
+          ;; a message for some other request (e.g. a stale timed-out eval on
+          ;; this session) — skip it, keep reading for ours
+          (not= (get (:msg outcome) "id") id)
+          (recur errored?)
+
+          :else
+          (let [eff (msg-effects (:msg outcome))]
+            (doseq [ev (:events eff)]
+              (emit ev))
+            (let [errored? (or errored? (:error? eff))]
+              (if (:done? eff)
+                {:error? errored?
+                 :timeout? false}
+                (recur errored?)))))))))
 
 (defn close!
   "Best-effort close a session and the socket. With a session, send a close op
@@ -142,7 +172,7 @@
     (try
       (bencode/write! conn {"op" "close"
                             "session" session
-                            "id" "3"})
+                            "id" (gen-id)})
       (bencode/read! conn close-timeout-ms)
       (catch e nil)))
   (net/close! conn))
