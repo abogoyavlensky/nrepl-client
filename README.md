@@ -53,11 +53,11 @@ timed-out request's late reply is skipped, not misread as the next eval's result
 > **Temporary — build lg from source.** nrepl-client needs let-go's `net` and
 > `bencode` namespaces, which are not yet in a released `lg`. Until a release
 > ships, build lg from the
-> [`tcp-client`](https://github.com/abogoyavlensky/let-go/tree/tcp-client) branch
+> [`main`](https://github.com/nooga/let-go) branch
 > and point lgx at it via `LGX_LG`:
 >
 > ```bash
-> git clone -b tcp-client https://github.com/abogoyavlensky/let-go /tmp/let-go
+> git clone -b tcp-client https://github.com/nooga/let-go /tmp/let-go
 > (cd /tmp/let-go && go build -o lg .)
 > export LGX_LG=/tmp/let-go/lg
 > ```
@@ -67,9 +67,6 @@ timed-out request's late reply is skipped, not misread as the next eval's result
 
 ```bash
 mise trust && mise install
-lgx test    # run the suite
-lgx fmt     # format
-lgx lint    # lint (clj-kondo)
 lgx check   # fmt check + lint + test
 ```
 
